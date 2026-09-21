@@ -69,12 +69,18 @@ def _url_payload_command(n: int) -> str:
 #: launch-approval directory and ``mcp/resolved``: gatewayd spawns an approved stub's
 #: backend outside the sandbox, so a session must not be able to write either path.
 #:
+#: Raised again, from 27,761, for the gateway-owned push-verdict gate: a new
+#: ``push_verdict.py`` submodule (~874 lines) that reads the operator activation leaf
+#: and answers the publish floor's verdict question, plus the floor's own binding
+#: checks and the new write-protected ``push-verdict-mirrors`` entries in ``__init__.py``.
+#: Its own tests live in ``test_push_verdict_gate.py``; this bound only tracks volume.
+#:
 #: The number IS the package's measured total, carrying no spare room: a ratchet with
 #: headroom admits exactly the unreviewed growth it exists to catch, so the next line
 #: added here fails this gate and has to be re-pinned deliberately, with its reason
 #: written above. The guards that detect a monolith growing back are the per-file cap
 #: and the facade's share below, and both must stay untouched.
-_PACKAGE_LINE_BUDGET = 27_761
+_PACKAGE_LINE_BUDGET = 28_782
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
