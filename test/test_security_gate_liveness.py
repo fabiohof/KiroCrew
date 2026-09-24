@@ -23,6 +23,7 @@ from kiro_crew import security
 from kiro_crew.security import (
     MAX_SCANNABLE_COMMAND_CHARS,
     MAX_SCANNABLE_SOURCE_BODY_CHARS,
+    is_denied,
     is_sensitive_bash_command,
 )
 
@@ -56,8 +57,8 @@ def _url_payload_command(n: int) -> str:
 #: budget is that size plus room for the machinery, plus the redaction record,
 #: credential-source and allowed-host modules, plus the resolver child script
 #: (``_child_realpath.py``, ~190 lines) that lives beside the resolver it serves
-#: rather than in the pool package. It is a bound on total volume:
-#: relocating a declaration between submodules moves nothing across it.
+#: rather than in the pool package. It is a bound on total volume: relocating a
+#: declaration between submodules moves nothing across it.
 #:
 #: Raised again, from 27,200, when the facade stopped binding re-exported names
 #: eagerly and began resolving each through its owner. That trades one import block
@@ -69,12 +70,20 @@ def _url_payload_command(n: int) -> str:
 #: launch-approval directory and ``mcp/resolved``: gatewayd spawns an approved stub's
 #: backend outside the sandbox, so a session must not be able to write either path.
 #:
+#: Re-pinned from 27,761 for the assignment resolver's whole-script walk in
+#: ``shell_normalizer.py``: command-boundary, quoted-separator, bounded ``eval``-join,
+#: per-choice guarded-reassignment readings enumerated exactly per co-referenced
+#: group (fail-closed past the group cap and the volume budget), one reading per
+#: token list, ``|&`` and glued-name binding rules, one reading budget per
+#: command, 560 lines measured -- the same kind of raise the resolver child
+#: script made.
+#:
 #: The number IS the package's measured total, carrying no spare room: a ratchet with
 #: headroom admits exactly the unreviewed growth it exists to catch, so the next line
 #: added here fails this gate and has to be re-pinned deliberately, with its reason
 #: written above. The guards that detect a monolith growing back are the per-file cap
 #: and the facade's share below, and both must stay untouched.
-_PACKAGE_LINE_BUDGET = 27_761
+_PACKAGE_LINE_BUDGET = 28_321
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
@@ -221,3 +230,27 @@ def test_url_payload_12kb_is_fast() -> None:
     assert 10_000 < len(cmd) <= MAX_SCANNABLE_COMMAND_CHARS
     assert is_sensitive_bash_command(cmd) is None
     assert _gate_seconds(cmd) < 2.0
+
+
+def _guarded_groups_command(groups: int) -> str:
+    return "; ".join(f"v{i}=a{'x' * 10}; false && v{i}=b; echo $v{i}" for i in range(groups))
+
+
+def test_many_guarded_groups_12kb_is_fast() -> None:
+    """300 independent guarded reassignments on the deny floor: ~28 s of per-group
+    rescans before the reading budget became the command's (refused past 64
+    readings in all).  The bound is in the command's own units -- the 300-group
+    command costs no more than a few times the 63-group one that reads every
+    reading -- because a shared CI worker runs this 8x slower than a quiet host
+    and a wall-clock number alone was a flake; the per-group rescan was 20x."""
+    read_every = _guarded_groups_command(63)
+    started = time.perf_counter()
+    assert is_denied(read_every) is None
+    every_reading = time.perf_counter() - started
+
+    cmd = _guarded_groups_command(300)
+    assert 10_000 < len(cmd) <= MAX_SCANNABLE_COMMAND_CHARS
+    started = time.perf_counter()
+    assert is_denied(cmd) is not None
+    past_the_cap = time.perf_counter() - started
+    assert past_the_cap < 4 * every_reading + 1.0, (every_reading, past_the_cap)
