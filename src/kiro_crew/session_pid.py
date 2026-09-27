@@ -627,11 +627,76 @@ def _collect_active_pids(sessions: "dict") -> tuple[set[int], bool]:
     return pids, True
 
 
-def _kill_pid_tree(pid: int) -> tuple[int, bool]:
+#: Parent links a descendant check will follow before giving up. A real agent tree is
+#: a handful deep; this only bounds the walk against a parent chain that is circular
+#: or being rewritten underneath the read.
+_ANCESTRY_WALK_LIMIT = 32
+
+
+def _is_our_descendant(pid: int, root: int) -> bool:
+    """Whether *pid*'s parent chain reaches *root*.
+
+    The ancestry edge a captured descendant needs. A pid enumerated as part of a tree
+    is only evidence about the instant it was enumerated; walking its parents back to
+    the root proves it is still in that tree NOW, which is what makes capturing its
+    identity mean anything.
+
+    Subtractive, like every other check on this path: an unreadable parent link ends
+    the walk and answers False, so a pid whose ancestry cannot be proven is not
+    signalled rather than signalled on the strength of a stale list.
+    """
+    seen: set[int] = set()
+    current = pid
+    for _ in range(_ANCESTRY_WALK_LIMIT):
+        if current in seen:
+            return False  # a cycle in the parent chain proves nothing
+        seen.add(current)
+        try:
+            parent = platform_compat.get_ppid(current)
+        except Exception:
+            return False
+        if parent == root:
+            return True
+        if parent <= 1:
+            # Reached init, or an unreadable link (-1). Either way the chain never
+            # passed through our root.
+            return False
+        current = parent
+    return False
+
+
+def _kill_pid_tree(pid: int, *, expected_start: str | None = None) -> tuple[int, bool]:
     """Kill *pid* and its descendant agent processes (bottom-up).
 
     Returns ``(total_killed, root_killed)`` so callers can distinguish
     whether the root process itself was sent SIGKILL.
+
+    ``expected_start`` is the root's process-start identity as the CALLER read it,
+    and passing it pins that identity across this function instead of only up to its
+    door. A caller that verified the pid immediately before calling still hands over
+    a verdict with an expiry: the descendant walk below is a ``pgrep``, unbounded in
+    time, and the root's own signal happens after it. A candidate that exits inside
+    that walk frees its number, and a managed runtime taking the number next passes
+    the argv gate -- it IS one of ours -- so the root signal lands on an unrelated
+    live session. Re-checked before the walk and again immediately before the root
+    signal, which is the rule :func:`_root_identity_holds` states for the sibling
+    teardown: before EVERY signal, not once up front.
+
+    Every signal this function sends is judged against a freshly read identity, because
+    a verdict older than the last syscall is a verdict about a pid that may have changed
+    hands. The ROOT is checked before the descendant read, so a pid that has already
+    moved is not walked; again after that read, because the read is itself a window --
+    one procfs children read, or a ``pgrep`` spawn -- and a recycled pid hands over a
+    stranger's child list; and again immediately before the root signal. Each CHILD
+    carries its own token, read when it was discovered, and is re-checked against that
+    token before it is signalled: the argv gate answers from cmdline, so it says a pid
+    is the KIND of process we manage, never that it is the one just found.
+
+    Subtractive, exactly as the token rule below requires. It only ever WITHHOLDS a
+    signal: an identity that differs, or that cannot be read at all, stops the kill
+    and the caller sees zero killed. Omitted -- the default -- leaves every existing
+    caller's behaviour untouched, because a caller with no captured identity has
+    nothing to compare and this adds no evidence it did not have.
 
     The argv gate below is a PID-RECYCLE guard and the only thing that authorizes a
     signal here: it asks whether this PID still names the kind of process the
@@ -649,6 +714,13 @@ def _kill_pid_tree(pid: int) -> tuple[int, bool]:
     """
     if pid <= 0:
         return 0, False
+    pinned = expected_start is not None
+    if pinned and not _root_identity_holds(pid, expected_start, gated=True):
+        logger.warning(
+            "_kill_pid_tree: PID %d is not the process the caller verified; not signalling it",
+            pid,
+        )
+        return 0, False
     killed = 0
     root_killed = False
     try:
@@ -656,8 +728,56 @@ def _kill_pid_tree(pid: int) -> tuple[int, bool]:
         from kiro_crew.acp.client import _get_child_pids
 
         children = _get_child_pids(pid)
+        # Each child's own identity, and the ancestry edge that makes capturing it
+        # meaningful. The loop below signals under the argv gate alone, and that gate
+        # answers from cmdline: it says this pid is the KIND of process we manage,
+        # never that it is the one just discovered. So each child carries its own
+        # token and is re-checked against it before its signal, for the same reason
+        # the root is.
+        #
+        # Identity ALONE is not enough here, because the capture is itself downstream
+        # of the enumeration: a child that exits between the two frees its number, and
+        # a replacement is captured under its own identity, which then matches at
+        # signal time. What rules that out is proving the pid is still OURS at capture
+        # -- ``_is_our_descendant`` walks the parent chain up to this root -- so
+        # everything captured was in this tree at that moment, and the identity check
+        # then holds it to being the same process at signal time.
+        child_ids = (
+            {
+                cpid: platform_compat.get_process_start_id(cpid)
+                for cpid in children
+                if cpid > 0 and _is_our_descendant(cpid, pid)
+            }
+            if pinned
+            else {}
+        )
+        if pinned and not _root_identity_holds(pid, expected_start, gated=True):
+            # The descendant READ is itself the window -- one procfs children read on
+            # Linux, a pgrep spawn on macOS -- and the children below are signalled
+            # under the argv gate alone, with no identity pin of their own. A pid
+            # recycled during that read means this list belongs to somebody else's
+            # runtime, so its children must not be signalled either.
+            logger.warning(
+                "_kill_pid_tree: PID %d changed identity while its descendants were read; "
+                "not signalling them",
+                pid,
+            )
+            return 0, False
         for cpid in reversed(children):
             if cpid <= 0 or not _is_managed_agent_process(cpid):
+                continue
+            if pinned and not _root_identity_holds(cpid, child_ids.get(cpid), gated=True):
+                # This number is not the child that was captured. Withheld, and that
+                # covers three cases with one rule: an identity that changed, one that
+                # could not be read, and a pid whose ancestry could not be proven at
+                # capture -- none of them is in ``child_ids``. This comparison
+                # authorizes a SIGNAL, so every unknown withholds it.
+                logger.warning(
+                    "_kill_pid_tree: child PID %d is not the process discovered under %d; "
+                    "not signalling it",
+                    cpid,
+                    pid,
+                )
                 continue
             try:
                 platform_compat.kill_pid(cpid, platform_compat.SIGKILL)
@@ -667,6 +787,17 @@ def _kill_pid_tree(pid: int) -> tuple[int, bool]:
     except Exception:
         logger.debug("Error killing children of PID %s", pid, exc_info=True)
     if not _is_managed_agent_process(pid):
+        return killed, root_killed
+    if pinned and not _root_identity_holds(pid, expected_start, gated=True):
+        # The descendant walk above is unbounded, so this is the check that matters:
+        # the argv gate says this pid is one of OURS, not that it is still the one
+        # the caller verified. A managed runtime that took the number during the walk
+        # satisfies the first and fails this.
+        logger.warning(
+            "_kill_pid_tree: PID %d changed identity during the descendant walk; "
+            "not signalling its root",
+            pid,
+        )
         return killed, root_killed
     try:
         if platform_compat.IS_WINDOWS:
