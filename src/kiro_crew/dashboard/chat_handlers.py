@@ -26,7 +26,7 @@ from kiro_crew import members as members_mod
 from kiro_crew import model_registry
 from kiro_crew.acp.client import AcpModelUnavailable
 from kiro_crew.agent_discovery import cached_project_agent_names, warm_project_agent_names
-from kiro_crew.agent_sdk.backends import ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS
+from kiro_crew.agent_sdk.backends import ACP_BACKEND_KIRO, ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS
 from kiro_crew.agent_sdk.capabilities import MODEL_NAMESPACE_ACP, capabilities_of
 from kiro_crew.agent_sdk.provider_identity import is_claude_code
 from kiro_crew.apps import permissions as app_permissions
@@ -9770,7 +9770,7 @@ async def api_chat_slots_model(request: web.Request) -> web.Response:
 
 
 async def _configured_backend_for_slot(slot: _ChatSlot) -> str:
-    """Resolve a cold slot through the same member-aware gate as the provider factory."""
+    """Resolve a slot through the same member-aware gate as the provider factory."""
     config = await asyncio.to_thread(KiroCrewConfig.load)
     from kiro_crew.members import select_provider_backend
 
@@ -9838,6 +9838,7 @@ async def api_chat_slot_selection_capabilities(request: web.Request) -> web.Resp
                 {
                     "known": False,
                     "model_effort_pair_ids": peer.get("model_effort_pair_ids") is True,
+                    "history_rerun_supported": False,
                 }
             )
         backend = peer.get("backend")
@@ -9864,6 +9865,7 @@ async def api_chat_slot_selection_capabilities(request: web.Request) -> web.Resp
                 "effort_supported": peer.get("effort_supported") is True and bool(levels),
                 "effort_levels": levels,
                 "model_effort_pair_ids": backend in ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS,
+                "history_rerun_supported": False,
             }
         )
     provider = state.sessions.get_provider(effective_session_key(slot))
@@ -9876,6 +9878,7 @@ async def api_chat_slot_selection_capabilities(request: web.Request) -> web.Resp
             {
                 "known": False,
                 "model_effort_pair_ids": backend in ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS,
+                "history_rerun_supported": backend == ACP_BACKEND_KIRO,
             }
         )
     backend = provider.capabilities.backend
@@ -9903,6 +9906,9 @@ async def api_chat_slot_selection_capabilities(request: web.Request) -> web.Resp
             ),
             source="local fallback",
         )
+    # History rewrites dispatch against current config, which can differ from
+    # an existing session's provider after a backend switch.
+    configured_backend = await _configured_backend_for_slot(slot)
     return web.json_response(
         {
             "known": True,
@@ -9910,6 +9916,7 @@ async def api_chat_slot_selection_capabilities(request: web.Request) -> web.Resp
             "effort_supported": supported and bool(levels),
             "effort_levels": levels,
             "model_effort_pair_ids": backend in ACP_BACKENDS_MODEL_EFFORT_PAIR_IDS,
+            "history_rerun_supported": configured_backend == ACP_BACKEND_KIRO,
         }
     )
 

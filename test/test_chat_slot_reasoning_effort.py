@@ -47,6 +47,33 @@ def _mock_state(slot: _ChatSlot | None = None, provider: object = None) -> Dashb
 
 class TestSlotSelectionCapabilities:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("slot_key", ["test", "member-test"])
+    @pytest.mark.parametrize("configured, live_backend", [("claude", ""), ("", "claude")])
+    async def test_history_rerun_uses_configured_backend_after_switch(
+        self, monkeypatch, slot_key, configured, live_backend
+    ):
+        monkeypatch.setattr(
+            chat_handlers.KiroCrewConfig,
+            "load",
+            lambda: SimpleNamespace(
+                agent=SimpleNamespace(
+                    acp_backend=live_backend if slot_key == "member-test" else configured,
+                    member_acp_backend=configured,
+                )
+            ),
+        )
+        provider = MagicMock(spec=AcpProvider)
+        provider.capabilities = SimpleNamespace(backend=live_backend)
+        provider.supports_effort.return_value = False
+        state = _mock_state(_ChatSlot(slot_key), provider)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            response = await client.get(f"/api/chat/slots/{slot_key}/selection-capabilities")
+            data = await response.json()
+        assert response.status == 200
+        assert data["backend"] == live_backend
+        assert data["history_rerun_supported"] is (configured == "")
+
+    @pytest.mark.asyncio
     async def test_live_effort_levels_use_the_shared_cap(self, monkeypatch, caplog):
         levels = [f"level{i:02d}" for i in range(33)]
         monkeypatch.setattr(chat_handlers, "get_reasoning_effort_values", lambda: set(levels))
@@ -74,7 +101,14 @@ class TestSlotSelectionCapabilities:
             ("pi", ["off", "minimal", "high"], False),
         ],
     )
-    async def test_uses_the_live_acp_provider(self, backend, levels, pair_ids):
+    async def test_uses_the_live_acp_provider(self, monkeypatch, backend, levels, pair_ids):
+        monkeypatch.setattr(
+            chat_handlers.KiroCrewConfig,
+            "load",
+            lambda: SimpleNamespace(
+                agent=SimpleNamespace(acp_backend=backend, member_acp_backend=backend)
+            ),
+        )
         chat_handlers.register_reasoning_effort_values(levels)
         slot = _ChatSlot("test")
         provider = MagicMock(spec=AcpProvider)
@@ -94,6 +128,7 @@ class TestSlotSelectionCapabilities:
             "effort_supported": True,
             "effort_levels": levels,
             "model_effort_pair_ids": pair_ids,
+            "history_rerun_supported": False,
         }
 
     @pytest.mark.asyncio
@@ -117,7 +152,11 @@ class TestSlotSelectionCapabilities:
             data = await resp.json()
 
         assert resp.status == 200
-        assert data == {"known": False, "model_effort_pair_ids": True}
+        assert data == {
+            "known": False,
+            "model_effort_pair_ids": True,
+            "history_rerun_supported": False,
+        }
 
     @pytest.mark.asyncio
     async def test_cold_member_session_uses_member_backend_for_pair_ids(self, monkeypatch):
@@ -134,10 +173,21 @@ class TestSlotSelectionCapabilities:
             data = await resp.json()
 
         assert resp.status == 200
-        assert data == {"known": False, "model_effort_pair_ids": True}
+        assert data == {
+            "known": False,
+            "model_effort_pair_ids": True,
+            "history_rerun_supported": False,
+        }
 
     @pytest.mark.asyncio
-    async def test_live_provider_can_report_effort_unsupported(self):
+    async def test_live_provider_can_report_effort_unsupported(self, monkeypatch):
+        monkeypatch.setattr(
+            chat_handlers.KiroCrewConfig,
+            "load",
+            lambda: SimpleNamespace(
+                agent=SimpleNamespace(acp_backend="opencode", member_acp_backend="opencode")
+            ),
+        )
         provider = MagicMock(spec=AcpProvider)
         provider.capabilities = SimpleNamespace(backend="opencode")
         provider.supports_effort.return_value = False
@@ -154,6 +204,7 @@ class TestSlotSelectionCapabilities:
             "effort_supported": False,
             "effort_levels": [],
             "model_effort_pair_ids": False,
+            "history_rerun_supported": False,
         }
         provider.get_valid_effort_levels.assert_not_called()
 
@@ -162,7 +213,7 @@ class TestSlotSelectionCapabilities:
         self, monkeypatch
     ):
         provider = MagicMock(spec=AcpProvider)
-        provider.capabilities = SimpleNamespace(backend="kiro")
+        provider.capabilities = SimpleNamespace(backend="")
         provider.supports_effort.return_value = True
         provider.get_valid_effort_levels.return_value = []
         monkeypatch.setattr(
@@ -177,10 +228,11 @@ class TestSlotSelectionCapabilities:
         assert resp.status == 200
         assert data == {
             "known": True,
-            "backend": "kiro",
+            "backend": "",
             "effort_supported": True,
             "effort_levels": ["low", "medium", "high"],
             "model_effort_pair_ids": False,
+            "history_rerun_supported": True,
         }
 
     @pytest.mark.asyncio
@@ -222,7 +274,11 @@ class TestSlotSelectionCapabilities:
             data = await resp.json()
 
         assert resp.status == 200
-        assert data == {**payload, "effort_levels": ["off", "minimal"]}
+        assert data == {
+            **payload,
+            "effort_levels": ["off", "minimal"],
+            "history_rerun_supported": False,
+        }
         register_levels.assert_called_once_with(["off", "minimal", "high"])
         manager.proxy_request.assert_called_once_with(
             "nobita", "GET", "api/chat/slots/peer-chat-9/selection-capabilities"
@@ -258,7 +314,7 @@ class TestSlotSelectionCapabilities:
             data = await resp.json()
 
         assert resp.status == 200
-        assert data == payload
+        assert data == {**payload, "history_rerun_supported": False}
 
     @pytest.mark.asyncio
     async def test_remote_slot_reports_an_error_when_its_peer_is_unavailable(self, monkeypatch):
