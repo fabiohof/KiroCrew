@@ -1000,7 +1000,7 @@ def ledger_admin_record(fp: str, pr_ref: str) -> None:
 # ── per-PR watcher sessions ──────────────────────────────────────────────────
 
 
-async def _handle_watchers(_request: web.Request) -> web.StreamResponse:
+async def _handle_watchers(request: web.Request) -> web.StreamResponse:
     """Every watcher session and its current state, plus a reconcile sweep.
 
     Reconciling from this polled read is how upstream drove it too: a watcher exits when
@@ -1015,6 +1015,10 @@ async def _handle_watchers(_request: web.Request) -> web.StreamResponse:
     side effect of a READ gave the operator no consent moment. Orphan-clone reclamation still
     runs either way — that only deletes scratch directories.
     """
+    owner_denied = await require_owner_dashboard_request(request, "auto_improvement.watchers_list")
+    if owner_denied is not None:
+        return owner_denied
+    await _audit_owner_route_allowed(request, "auto_improvement.watchers_list")
 
     registry = pr_watchers.get_registry()
     sessions = await asyncio.to_thread(registry.list_sessions)

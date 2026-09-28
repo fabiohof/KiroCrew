@@ -30,6 +30,8 @@ _AGENT_ROUTES = [
     ("POST", "_handle_run_start", "auto_improvement.run_start"),
     ("POST", "_handle_calibrate", "auto_improvement.calibrate"),
     ("POST", "_handle_watcher_start", "auto_improvement.watcher_start"),
+    # A read, but its reconcile sweep starts watchers and can mark drafts ready.
+    ("GET", "_handle_watchers", "auto_improvement.watchers_list"),
 ]
 
 #: Routes that publish under the owner's git or GitHub identity.
@@ -75,6 +77,12 @@ def recorder(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
 
     monkeypatch.setattr(routes, "_json_body", _json_body)
     monkeypatch.setattr(routes, "_validated_fp", _validated_fp)
+
+    def _get_registry() -> None:
+        seen["body"].append("watcher_registry")
+        raise _Reached
+
+    monkeypatch.setattr(routes.pr_watchers, "get_registry", _get_registry)
     monkeypatch.setattr(store, "read_json", _read_json)
     monkeypatch.setattr(
         routes,
