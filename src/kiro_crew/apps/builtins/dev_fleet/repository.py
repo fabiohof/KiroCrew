@@ -144,7 +144,8 @@ def _configured_filter_commands(path: str) -> tuple[list[str], str | None]:
         if entry.problem:
             return [], f"its own git config at {entry.name} {entry.problem}"
         if entry.text is None:
-            # Absent, or not a regular file. git creates ``config.worktree`` lazily, so
+            # Absent, and only absent: anything that exists but was not read carries a
+            # problem and was refused above. git creates ``config.worktree`` lazily, so
             # an absent one is the empty scope rather than a scope nobody read.
             continue
         if entry.name == "config.worktree":
@@ -531,7 +532,11 @@ def _config_read_at(dir_fd: int | None, dir_path: Path, name: str) -> _ConfigRea
     if stat.S_ISLNK(info.st_mode):
         return _ConfigRead(name, None, "is a symlink")
     if not stat.S_ISREG(info.st_mode):
-        return _ConfigRead(name, None, None)
+        # Exists, so git WILL parse it -- a FIFO streams whatever a holder process
+        # writes, an `[include]` line included. Classifying it absent would let both
+        # gates skip the one entry whose content is fully attacker-chosen, so it is a
+        # problem for the same reason an unreadable file is: doubt is not safety.
+        return _ConfigRead(name, None, "is not a regular file")
     text = _read_bounded(
         name if dir_fd is not None and _PINNED_READS else dir_path / name, dir_fd=dir_fd
     )
@@ -592,7 +597,7 @@ def _include_refusal(path: str) -> str | None:
         if entry.problem:
             return f"its own git config at {entry.name} {entry.problem}"
         if entry.text is None:
-            continue  # absent, or not a regular file: nothing to judge
+            continue  # absent, and only absent: an unread entry carries a problem
         if _names_an_include(entry.text):
             return (
                 "its own git config includes another file, so git would open that "

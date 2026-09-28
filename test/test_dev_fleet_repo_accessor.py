@@ -1974,6 +1974,59 @@ def test_a_repo_that_includes_another_file_is_declined_before_the_read(
     assert "read(_METADATA_MAX_BYTES + 1)" in inspect.getsource(repository._read_bounded_bytes)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this platform")
+def test_a_config_that_is_not_a_regular_file_refuses_instead_of_reading_as_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A config entry that EXISTS but is not a regular file refuses the repository.
+
+    The invariant both gates rest on: an entry whose bytes this module did not read
+    carries a ``problem``, and only a genuinely absent one reads as absent. A FIFO is
+    the case that separates them -- it exists, so git parses it and a holder process
+    chooses every byte git sees, ``[include] path = <credential store>`` included, yet
+    ``S_ISREG`` is false so no content was ever read here. Classifying that absent
+    would make both gates ``continue`` past the one entry whose content is entirely
+    attacker-chosen, and the clearance would admit the checkout.
+
+    Refused at ``lstat``, so nothing opens the FIFO: a read would block on the holder.
+    """
+    fifo = tmp_path / "fifo-repo"
+    (fifo / ".git").mkdir(parents=True)
+    os.mkfifo(fifo / ".git" / "config")
+
+    entry = repository._config_read_at(None, fifo / ".git", "config")
+    assert entry.text is None, "nothing may be read out of a non-regular entry"
+    assert (
+        entry.problem == "is not a regular file"
+    ), "an entry that exists unread must carry a problem, not read as absent"
+
+    # Gate 1 -- the include gate, which is what stands between this checkout and a
+    # spawn that lets git open whatever the FIFO names.
+    reason = repository._include_refusal(str(fifo))
+    assert reason is not None, "a FIFO config must refuse the repository"
+    assert "is not a regular file" in reason
+
+    # Gate 2 -- the filter-driver gate reads the same entries and must refuse on the
+    # same grounds, rather than reporting an empty driver list for an unread scope.
+    monkeypatch.setattr(runtime, "_trusted_bin", lambda _name: "git")
+    drivers, unread = repository._configured_filter_commands(str(fifo))
+    assert drivers == []
+    assert unread and "is not a regular file" in unread
+
+    # A directory is the other non-regular shape, and it takes the same answer: the
+    # rule is about what was READ, not about which non-regular kind it is.
+    dirlike = tmp_path / "dir-repo"
+    (dirlike / ".git" / "config").mkdir(parents=True)
+    assert repository._include_refusal(str(dirlike)) is not None
+
+    # The control: a plain regular config on the same fixture shape still admits, so
+    # the refusals above come from the entry's kind and not from the fixture.
+    ok = tmp_path / "ok-repo"
+    (ok / ".git").mkdir(parents=True)
+    (ok / ".git" / "config").write_text("[core]\n\tbare = false\n", encoding="utf-8")
+    assert repository._include_refusal(str(ok)) is None
+
+
 def test_a_linked_worktree_is_judged_by_the_config_its_pointer_names(tmp_path) -> None:
     """A linked worktree keeps its config elsewhere, and that file is the one that counts.
 
