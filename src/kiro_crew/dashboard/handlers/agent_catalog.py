@@ -128,7 +128,7 @@ async def api_agent_catalog(request: web.Request) -> web.Response:
     redact = state is None or not is_owner_dashboard_request(request)
     rows = []
     for name, member in config.agents.items():
-        row = _agent_roster_row(name, "global", member, redact=redact)
+        row = _agent_roster_row(name, "global", member, redact=redact, agents=config.agents)
         row["selection_kind"] = "member"
         rows.append(row)
     rows.extend(_template_row(agent) for agent in templates)

@@ -10,7 +10,8 @@ import ErrorNotice from '../components/ErrorNotice'
 import { Btn, Input, Badge, EmptyState, PageHeader } from '../components/ui'
 import MarkdownRenderer from '../components/MarkdownRenderer'
 import MessageErrorBoundary from '../components/MessageErrorBoundary'
-import AgentSelector from '../components/AgentSelector'
+import AgentSelector, { type KiroCrewAgent } from '../components/AgentSelector'
+import { agentDisplayLabel } from '../utils/agentLabel'
 import { useAgents } from '../hooks/useAgents'
 import { useImeGuard } from '../hooks/useImeGuard'
 import { useMenuKeyboard, menuItemsOf } from '../hooks/useMenuKeyboard'
@@ -268,8 +269,11 @@ export function MessageBubble({ msg, agents, onReply, onOpenThread, onApprove }:
 
 const LISTEN_MODES: Array<ChannelAgent['listenMode']> = ['all', 'mention', 'silent']
 
-function AgentControlRow({ agent, onDismiss, onListenChange, onClearContext }: {
-  agent: ChannelAgent; onDismiss: () => void; onListenChange: (m: ChannelAgent['listenMode']) => void; onClearContext: () => void
+function AgentControlRow({ agent, roster, onDismiss, onListenChange, onClearContext }: {
+  /** The roster to resolve the stored crew handle against, or `undefined`
+   *  while it is still loading: the subtitle is held rather than flashing the
+   *  raw `member_id` before the display name arrives. */
+  agent: ChannelAgent; roster: readonly KiroCrewAgent[] | undefined; onDismiss: () => void; onListenChange: (m: ChannelAgent['listenMode']) => void; onClearContext: () => void
 }) {
   const [menu, setMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -323,7 +327,7 @@ function AgentControlRow({ agent, onDismiss, onListenChange, onClearContext }: {
       <Badge variant={STATE_BADGE[agent.state]?.variant || 'warn'}>{STATE_BADGE[agent.state]?.label || agent.state}</Badge>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text truncate">{agent.role}</div>
-        {agent.agentName && <div className="text-[11px] text-muted font-mono truncate">{agent.agentName}</div>}
+        {agent.agentName && roster && <div className="text-[11px] text-muted font-mono truncate" title={agentDisplayLabel(agent.agentName, roster)}>{agentDisplayLabel(agent.agentName, roster)}</div>}
         <div className="relative inline-block" ref={menuRef}>
           <Btn ref={triggerRef} onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu} className="!p-0 !border-none !rounded-none text-[13px] text-muted hover:text-text">
             <Badge variant={LISTEN_BADGE[agent.listenMode]?.variant || 'warn'}>{LISTEN_BADGE[agent.listenMode]?.label || agent.listenMode}</Badge>
@@ -606,6 +610,13 @@ export default function ChannelPage() {
   // it 2px -- a column that cannot hold one character per line.
   const { isMobile, showList, showDetail, openDetail, closeDetail } = useListDetailView()
   const [showAddAgent, setShowAddAgent] = useState(false)
+  // The roster the agent rail resolves each role's stored crew handle against:
+  // a role added from the picker stores the crew's `member_id`, and the rail
+  // shows the crew's display name, not that id. Until the catalog has answered
+  // the rail has no roster at all, so the subtitle waits instead of showing
+  // the id for a frame on every visit.
+  const { agents: rosterRows, settled: rosterSettled } = useAgents(0)
+  const roster = rosterSettled ? rosterRows : undefined
   const [loading, setLoading] = useState(true)
   /** The last channel-list read was refused, so an empty list is unknown, not empty. */
   const [listFailed, setListFailed] = useState(false)
@@ -945,7 +956,7 @@ export default function ChannelPage() {
                 </div>
                 <div className="flex-1 overflow-y-auto p-2 space-y-1">
                   {channel.agents.map((agent) => (
-                    <AgentControlRow key={agent.id} agent={agent}
+                    <AgentControlRow key={agent.id} agent={agent} roster={roster}
                       onDismiss={() => handleDismiss(agent.id)}
                       onListenChange={m => handleListenChange(agent.id, m)}
                       onClearContext={async () => {
