@@ -1916,7 +1916,12 @@ NON_EGRESS_REDACTION_MODULES: frozenset[str] = frozenset(
         # not an output bound for a human or a third party, and the value that DOES
         # reach a dashboard client (``GET /api/apps/registries``) is protected by
         # refusing a credential-bearing repo outright rather than by redacting it.
-        "apps/registry.py",
+        # The same owners reduce git output from a credentialed transport to fixed
+        # failure classes, which carry no text from that output.
+        "apps/registry_pipeline/checkout.py",
+        "apps/registry_pipeline/git_targets.py",
+        "apps/registry_pipeline/indexes.py",
+        "apps/registry_pipeline/sources.py",
         # Internal persistence / indexing (the on-disk or in-memory copy), whose
         # user-visible surface is already covered by a registered sink.
         "dashboard/chat_folders.py",

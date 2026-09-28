@@ -729,7 +729,7 @@ Wired sites:
   pre-method companion adapter degrades to no-watcher instead of raising.
 - `apps/manager.py` — builtin discovery + orphan detection merge
   `current_context().apps_loader` sources.
-- `apps/registry.py` / `apps/routes.py` — clone-sandbox-mode decision routes
+- `apps/registry_pipeline/sources.py` / `apps/routes.py` — clone-sandbox-mode decision routes
   through `current_context().registry` (`_context_clone_sandbox_mode`).
 - Telemetry `record_event` sites — `dashboard/server.py` records `gateway_start`
   at boot; `dashboard/chat_runner.py` and `slack/handler.py` record one
@@ -936,11 +936,11 @@ is byte-identical) with no `CONTRACT_VERSION` bump.
   `slack/gateway.py::_is_heartbeat_safe_tool` after the core `HEARTBEAT_SAFE_TOOLS`
   exact-match. Default `frozenset()`. ADD-only; never sourced from config.
 - `AppsLoader.registry_rows() -> List[Dict]` — ADD-only merged by
-  `apps/registry.py::_load_registry_file` after bundled `app-registry.json`
+  `apps/registry_pipeline/sources.py::_load_registry_file` after bundled `app-registry.json`
   (same-`name` core row wins). Default `[]`.
 - `AppsLoader.default_registries() -> List[Dict]` — external app registries the
   edition pins, merged with the operator's `config.registries` by
-  `apps/registry.py::_effective_registries`, which is the single list every
+  `apps/registry_pipeline/sources.py::_effective_registries`, which is the single list every
   registry consumer reads (index fetch/refresh, the trusted-host allowlist, row
   lookup, install, the blob-proxy allowlist). Rows are the field shape of
   `ExternalRegistryConfig` (`{name, repo, branch, label, review, trust}`).
@@ -1360,7 +1360,7 @@ representative rather than exhaustive.
 
 - `apps/routes.py` — `_fetch_git_blob`'s per-URL clone-sandbox-mode decision IS
   wired: it routes through `_context_clone_sandbox_mode` (same as the
-  `apps/registry.py` clone sites), so a companion's extended trusted-host set
+  registry's clone sites in `apps/registry_pipeline/`), so a companion's extended trusted-host set
   applies to registry-blob fetches too. The other `wrap_argv` sites run local
   lifecycle scripts (no per-URL git host), so they have no clone decision to
   route.

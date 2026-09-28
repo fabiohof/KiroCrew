@@ -81,7 +81,7 @@ Five profiles:
 | `none` | The user's own interactive terminal | No rlimits and no OOM bias, so the shim is skipped entirely unless the spawn also asks for a controlling terminal (`ctty_fd=`), which the terminal does |
 
 Async, shim-routed spawns cover MCP server probes (`mcp_discovery.py`), the app
-registry's clone and build spawns (`apps/registry.py`, `apps/routes.py`), the task
+registry's clone and build spawns (`apps/registry.py`, `apps/registry_pipeline/`, `apps/routes.py`), the task
 runner's test spawn (`task_executor.py`), agent-selected git (`git_coord.py`), shell
 hooks (`hooks.py`), the knowledge worker pool (`knowledge/llm_pool.py`), voice
 synthesis (`voice_reply.py`), the source-provider CLI spawns

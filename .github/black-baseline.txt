@@ -134,7 +134,6 @@ src/kiro_crew/apps/manager.py
 src/kiro_crew/apps/manifest.py
 src/kiro_crew/apps/module_loader.py
 src/kiro_crew/apps/permissions.py
-src/kiro_crew/apps/registry.py
 src/kiro_crew/apps/route_registry.py
 src/kiro_crew/apps/scaffold.py
 src/kiro_crew/apps/teardown.py
