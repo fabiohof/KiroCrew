@@ -325,6 +325,68 @@ def verify_layout(settings: Settings) -> None:
         )
 
 
+def export_kiro_home(settings: Settings) -> Path:
+    """Point this task's kiro home at ``<data home>/kiro``. Returns the agents dir.
+
+    Exported into THIS process's environment, not just handed to the backend, because
+    the bundle installer resolves the agents directory from ``os.environ``
+    (``bundle.default_kiro_agents_dir``, which mirrors kiro-cli's own
+    ``$KIRO_HOME``-or-``~/.kiro`` rule and imports no ``kiro_crew``). One export is
+    therefore what makes the installer and the backend agree on one directory; the
+    backend additionally gets the value from ``settings`` (``build_backend_env``), so
+    neither side depends on the other having run first.
+
+    WHY the default is wrong here, which is the whole reason this exists. With no
+    ``KIRO_HOME`` the agents directory is the process HOME's ``~/.kiro/agents``, which
+    every instance under that ``$HOME`` shares. The backend runs on a non-default data
+    home (``KIROCREW_HOME=<data home>``) and Kiro Crew REFUSES to rewrite a shared
+    agents dir from one: the specs it writes pin the writer's data home into every
+    managed MCP server entry, which fails strict session identity for a default-home
+    gateway (kirodotdev/KiroCrew#9690). Measured consequence in the container: the
+    supervisor's crew spec landed in the shared dir with no ownership provenance, the
+    backend read it as another home's, declined to write, and every turn died with
+    ``DerivedSpecStale: the default agent spec .../kirocrew.json is missing``.
+
+    ``<data home>/kiro`` is that guard's own documented private-target case (see
+    ``Settings.kiro_home``), so this fixes the refusal by giving the task a directory
+    it owns -- NOT by relaxing the guard, which protects a real poisoning bug.
+
+    Fails CLOSED on two things, because both are silent otherwise:
+
+    * A directory that cannot be created. The backend would then decline for a second
+      reason and the turn would die the same way, several minutes later and with the
+      refusal attributed to the guard instead of to the filesystem.
+    * The two resolvers disagreeing. This asserts that the installer's own resolver,
+      read back after the export, answers ``<kiro home>/agents``. That is the single
+      invariant the fix rests on, and a future change to either spelling breaks it
+      quietly -- the deployment would boot, install the crew in one directory and
+      serve agents out of another.
+    """
+    agents = settings.kiro_home / "agents"
+    os.environ[backend_mod.ENV_KIRO_HOME] = str(settings.kiro_home)
+    try:
+        agents.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise common.ConfigError(
+            f"could not create the task's agent-spec directory {agents} ({exc}). This is "
+            f"where both the crew's spec and Kiro Crew's own default spec must live; "
+            f"refusing to start rather than letting the backend fall back to the shared "
+            f"{Path('~/.kiro/agents').expanduser()}, which it is not allowed to rewrite "
+            f"from a non-default data home and which would kill every turn at "
+            f"DerivedSpecStale."
+        ) from exc
+    resolved = bundle_mod.default_kiro_agents_dir()
+    if resolved != agents:
+        raise common.ConfigError(
+            f"the crew installer resolves the agents directory as {resolved}, but this "
+            f"task owns {agents}. The installer reads $KIRO_HOME the way kiro-cli does "
+            f"and the backend reads it through Kiro Crew's own resolver; if the two "
+            f"disagree the crew is installed where nothing serves it. Refusing to start."
+        )
+    log.info("kiro home: %s (agent specs in %s)", settings.kiro_home, agents)
+    return agents
+
+
 #: The three things the sandbox probe can conclude. A verdict is a string rather
 #: than a tri-state boolean because the interesting case carries information: an
 #: undetermined verdict names WHY it could not be settled, and an operator needs
@@ -590,6 +652,12 @@ def run(settings: Settings, *, wait_for_shutdown=None) -> int:
     #    turn: bad path layout, no model identity, a sandbox absent where one is
     #    required, or a bundle that is absent or names a different crew.
     verify_layout(settings)
+    # Before anything reads or writes an agent spec: give this task its OWN kiro home,
+    # so the crew's spec and Kiro Crew's default spec share one directory that the
+    # backend is allowed to write. Ahead of `build_backend_env` only for readability --
+    # that function takes the value from the settings, not from this export -- but it
+    # MUST precede `install_bundle`, which resolves its destination from the environment.
+    export_kiro_home(settings)
     env = backend_mod.build_backend_env(settings)
     # The identity is delivered in the SUPERVISOR's environment and moved into the
     # vault here, which is where the backend's auth callback reads it.
