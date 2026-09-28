@@ -289,8 +289,10 @@ ACP_BACKENDS_KNOWN: FrozenSet[str] = frozenset(
 #: kiro-cli (and KAS, which is kiro-cli's relay) is handed ``--agent`` and loads
 #: the spec itself, so Crew passes it an empty array — a duplicate there would
 #: shadow the spec's own entries. claude-agent-acp reads no agent file at all, so
-#: the array is the ENTIRE MCP surface of the session: an empty one means the
-#: harness works while every Crew tool is silently absent.
+#: the array is the only channel CREW has onto the session's MCP surface (the harness
+#: mounts what its own user- and project-scope ``mcpServers`` and plugins declare
+#: beside it): an empty one means the harness works while every Crew tool is
+#: silently absent.
 #:
 #: codex-acp is the second member, and it joins on the same terms rather than on
 #: an exact likeness to claude: it does load a config file of its OWN
@@ -1461,8 +1463,10 @@ def overlay_project_scope(backend: str, work_dir: Any) -> dict[str, Any]:
 # by a channel other than the ``session/new`` ``mcpServers`` array.
 #
 # The unresolved-``@server``-ref detector (``agent_sdk.mcp_refs``) judges a spec's
-# ``tools`` refs against the servers the session actually receives, and for an
-# array-backed host that is the wire array: what is not in it is not mounted.
+# ``tools`` refs against the servers Crew's projection delivers, and for an
+# array-backed host that is the wire array: what is not in it, Crew did not mount
+# (the harness may still mount a same-named server from a configuration of its
+# own, which the detector never reads -- so its line says "may", never "absent").
 # These two hosts mount the spec's servers by another channel, so for them the
 # spec's own server names are satisfied by construction and only a ref naming a
 # server the spec does NOT declare is unresolved. kiro-cli resolves ``--agent``
