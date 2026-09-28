@@ -46,6 +46,7 @@ import ModelDropdownList from '../components/ModelDropdownList'
 import { useAvailableModelsQuery } from '../hooks/useAvailableModels'
 import { useListboxKeyboard } from '../hooks/useListboxKeyboard'
 import { useDndSensors } from '../hooks/useDndSensors'
+import { haptic } from '../lib/haptic'
 import { useSessionPalette } from '../hooks/useSessionPalette'
 import { useMoveSlotToFolder } from '../hooks/useMoveSlotToFolder'
 import { ancestorsOf, buildLineage, descendantsOf, orphanCitation } from '../lib/sessionLineage'
@@ -4627,6 +4628,8 @@ function ChatSidebar({
       persistPinnedSessionOrder(next)
       return next
     })
+    // The drop seats: the row's stored position is the thing that moved.
+    haptic('light')
   }, [naturalPinnedOrder])
 
   // ── Stale-session collapse ─────────────────────────────────────────────────
@@ -6737,6 +6740,9 @@ function ChatSidebar({
     // that gesture is a re-parent and the collision layer routes it as one.
     const changes = computeSiblingReorder(current, activeId, overId)
     if (!changes.length) return
+    // Past every refusal above: rows really renumber, so the drop seats here
+    // and not in the caller, which cannot see which releases this helper drops.
+    haptic('light')
     // Snapshot the pre-drag order of exactly the rows this drag renumbers, so a
     // rejected write can be rolled back field-scoped rather than by restoring a
     // whole-list snapshot (which would clobber a concurrent rename/move).
@@ -7112,6 +7118,7 @@ function ChatSidebar({
     // A drop back onto the session's current folder arms nothing (arm's own
     // no-op check) — and must not dismiss the folder offer for nothing either.
     if ((slot?.folder_id || null) === to) return
+    haptic('light')
     const dest = to ? folders.find(f => f.id === to) : undefined
     dismissFolderMove()
     armDragMove({
@@ -7132,6 +7139,7 @@ function ChatSidebar({
     const target = parentId ?? ''
     if ((folder.parent_id || '') === target) return
     if (target && collectFolderSubtreeIds(current, folderId).has(target)) return
+    haptic('light')
     const dest = parentId ? current.find(f => f.id === parentId) : undefined
     dismissDragMove()
     armFolderMove({
@@ -7155,6 +7163,9 @@ function ChatSidebar({
   // (draggable rows + droppable folder/root targets); the active item's
   // data.type routes the drop.
   const handleSidebarDragStart = useCallback((e: DragStartEvent) => {
+    // Past the sensor's hold/distance constraint: the row is really picked up.
+    // Nothing on screen has moved yet under a finger, so the hand is told here.
+    haptic('medium')
     // Drop the hold FIRST: the freeze below pins the list dnd-kit's drop math is
     // computed against, and a displaced row would make the render disagree with it.
     releaseHoverPin()
@@ -7192,6 +7203,10 @@ function ChatSidebar({
   })
   const handleSidebarDragEnd = useCallback((event: DragEndEvent) => {
     resetSidebarDrag()
+    // The drop seats only where the sidebar ACTS. The move/reorder helpers tap
+    // past their own refusals (same folder, own subtree, unknown target), so a
+    // release they drop is felt as nothing, the same as a release over empty
+    // space; the one drop handled inline below taps after its own guard.
     const { active, over } = event
     const a = active.data.current as {
       type?: string
@@ -7264,6 +7279,7 @@ function ChatSidebar({
         // the refusal must not depend on the affordance having been rendered,
         // and memory_mode can change mid-drag. Same function the zone uses.
         if (sessionRefBlockReason({ key: a.key, activeSlot, memoryMode: src?.memory_mode })) return
+        haptic('light')
         onDropSessionRef?.({
           key: a.key,
           title: src?.title && src.title !== src.key ? src.title : a.key,

@@ -36,6 +36,7 @@ import { useFocusMode, useFocusChromeVisible, setFocusChromeVisible, FOCUS_INSET
 import { APP_NAV_ORDER_KEY, buildReorderBaseline, mergeVisibleReorder, readAppNavOrder, useAppNavHidden } from './lib/appNavHidden'
 import { useNavPinned } from './lib/navPinned'
 import { computeHeaderDragGaps, type DragGap } from './lib/dragGaps'
+import { haptic } from './lib/haptic'
 import { isEmbeddedPane } from './lib/embedded'
 import { OVERLAY_Z_MAX, THEME_DECOR_SLOT_ID, TOPBAR_FOCUS_Z, TOPBAR_Z, registerThemeDecorSlot } from './lib/themeDecorLayer'
 import { useHoverIntent } from './hooks/useHoverIntent'
@@ -2438,7 +2439,10 @@ export default function App() {
       sortedAppGroup: sortedAll.filter(n => !appNavHidden.has(n.id)),
     }
   }, [advertisedNavItems, appNavItems, appNavOrder, appNavHidden])
-  const handleAppDragStart = useCallback((e: DragStartEvent) => setActiveAppDragId(e.active.id as string), [])
+  // dnd-kit fires this once the sensor's constraint is met (the 250ms touch hold
+  // or the mouse distance), so the tap marks the pick-up itself, not the touch.
+  // Touch is the only sensor with an engine under it; elsewhere haptic no-ops.
+  const handleAppDragStart = useCallback((e: DragStartEvent) => { haptic('medium'); setActiveAppDragId(e.active.id as string) }, [])
   // Materialize implicit sidebar positions the moment an app is HIDDEN: once
   // an id is in the hidden set, its position must live in the persisted
   // order, because every later event that could erase the implicit source —
@@ -2476,6 +2480,8 @@ export default function App() {
     setActiveAppDragId(null)
     const { active, over } = e
     if (!over || active.id === over.id) return
+    // Past the guard, so the tap means the rail really reordered.
+    haptic('light')
     const ids = sortedAppGroup.map(n => n.id)
     const from = ids.indexOf(active.id as string)
     const to = ids.indexOf(over.id as string)

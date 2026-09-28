@@ -10,6 +10,7 @@ import { useAnchorRemeasure } from '../hooks/useAnchorRemeasure'
 import { useScrollEdges } from '../hooks/useScrollEdges'
 import VoiceStatusBar from './VoiceStatusBar'
 import VoiceDictationPanel, { useDictationPanelUsable } from './VoiceDictationPanel'
+import { haptic } from '../lib/haptic'
 import { createPortal } from 'react-dom'
 import { InstantTip, useInstantTip } from './InstantTip'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -1699,9 +1700,19 @@ function ChatInput({
     // A flipped send never asks: the chord is the sender answering the question
     // themselves for this one message, so handing it to the oracle anyway would
     // ignore the only explicit instruction on the send.
+    // The message leaves the hand here, on every path (Enter, Send, steer) --
+    // but only when there is one: an Enter on an empty composer reaches onSend
+    // (which drops it) and must stay as silent as the Send button it disables.
+    if (value.trim() || pendingFiles.length || pendingSessions.length) haptic('light')
     if (steerNow && onSteer) onSteer(steerAuto && !flip ? { auto: true } : undefined)
     else onSend()
-  }, [disabled, voiceTranscribing, busyChoiceAvailable, steerOnly, steerActive, steerAuto, onSteer, onSend])
+  }, [disabled, voiceTranscribing, busyChoiceAvailable, steerOnly, steerActive, steerAuto, onSteer, onSend, value, pendingFiles.length, pendingSessions.length])
+  // Every stop button in the row goes through this, so the tap and the truthiness
+  // checks on `onStop` (which decide whether a button renders at all) stay apart.
+  const stopWithTap = useCallback(() => {
+    haptic('medium')
+    onStop?.()
+  }, [onStop])
   const sendFollowUp = useCallback((text?: string, sourceKeyAtClick?: string | null) => {
     if (!disabled) onFollowUpSend?.(text, sourceKeyAtClick)
   }, [disabled, onFollowUpSend])
@@ -4780,7 +4791,7 @@ function ChatInput({
                   <div className="flex items-center gap-1.5">
                     <button
                       className="w-8 h-8 rounded-lg bg-danger text-danger-fg border-none flex items-center justify-center cursor-pointer hover:bg-danger/80 transition-all"
-                      onClick={onStop}
+                      onClick={stopWithTap}
                       title={i18nT('components.chatInput.force_reset_taking_longer_than_expected')}
                       aria-label={i18nT('components.chatInput.force_reset_session_taking_longer_than_expected')}
                       data-testid="stop-button-escape-hatch"
@@ -4802,7 +4813,7 @@ function ChatInput({
                       force-stop path while a cancel hangs (#9548 UX review). */}
                   <motion.button
                     className="w-8 h-8 rounded-lg bg-danger/10 border-none text-danger hover:bg-danger/20 flex items-center justify-center cursor-pointer transition-all"
-                    onClick={onStop}
+                    onClick={stopWithTap}
                     title={i18nT('components.chatInput.force_kill_discards_in_progress_work_and_queued')}
                     aria-label={i18nT('components.chatInput.force_kill_session_discards_in_progress_work_and')}
                     animate={{ opacity: [0.8, 1, 0.8] }}
@@ -4814,7 +4825,7 @@ function ChatInput({
                   <span className="text-xs text-muted whitespace-nowrap" data-testid="stop-force-hint">{i18nT('components.chatInput.click_again_to_force_stop')}</span>
                 </div>
               ) : isQueued ? (
-                <button className="w-8 h-8 rounded-full bg-warn text-warn-fg border-none flex items-center justify-center cursor-pointer hover:bg-warn/80 transition-all" onClick={onStop} title={i18nT('components.chatInput.stopping')} aria-label={i18nT('components.chatInput.stopping_2')}>
+                <button className="w-8 h-8 rounded-full bg-warn text-warn-fg border-none flex items-center justify-center cursor-pointer hover:bg-warn/80 transition-all" onClick={stopWithTap} title={i18nT('components.chatInput.stopping')} aria-label={i18nT('components.chatInput.stopping_2')}>
                   <Loader2 size={18} className="animate-spin" />
                 </button>
               ) :
@@ -4859,7 +4870,7 @@ function ChatInput({
                   </button>
                 )
               ) : onStop ? (
-                <button className="w-8 h-8 rounded-lg bg-transparent border-none text-danger hover:bg-danger/10 flex items-center justify-center cursor-pointer transition-all" onClick={onStop} title={i18nT('components.chatInput.stop_generation')} aria-label={i18nT('components.chatInput.stop_generation')} data-testid="stop-button-armed">
+                <button className="w-8 h-8 rounded-lg bg-transparent border-none text-danger hover:bg-danger/10 flex items-center justify-center cursor-pointer transition-all" onClick={stopWithTap} title={i18nT('components.chatInput.stop_generation')} aria-label={i18nT('components.chatInput.stop_generation')} data-testid="stop-button-armed">
                   <Square size={18} fill="currentColor" />
                 </button>
               ) : steerOnly ? (
