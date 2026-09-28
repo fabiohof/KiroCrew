@@ -1,4 +1,4 @@
-/* The crew editor's Perpetual mode refusal offers the same "Ask the agent"
+/* The crew editor's Perpetual mode refusal offers the same crewmate-chat
  * hand-off the Crewmates page side panel offers -- under the sheet's own
  * "nothing at stake" test. The hand-off navigates to /chat and unmounts the
  * sheet, so it is offered only while no pane holds unsaved work; an open,
@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { renderWithProviders } from './helpers'
 import KiroCrewAgentsPage from '../pages/KiroCrewAgentsPage'
+import { api } from '../api/client'
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -72,14 +73,25 @@ const perpetualSwitch = () =>
 beforeEach(() => vi.clearAllMocks())
 
 describe('crew editor — Perpetual mode refusal hand-off', () => {
-  it('with nothing at stake, a refused press offers "Ask the agent", as the side panel does', async () => {
+  it('with nothing at stake, a refused press offers the crewmate-chat action', async () => {
     await openSchedules()
+    expect(screen.getByTestId('crew-perpetual-save-split')).toBeTruthy()
+    const saveChanges = screen.getByRole('button', { name: 'Save changes' })
+    expect(saveChanges).toBeDisabled()
     fireEvent.click(perpetualSwitch())
     const notice = await screen.findByTestId('crew-perpetual-error')
     expect(notice).toHaveTextContent(/stop the task there first/i)
-    expect(within(notice).getByRole('button', { name: /Ask the agent/ })).toBeTruthy()
+    expect(within(notice).getByRole('button', { name: /Open its chat/ })).toBeTruthy()
     // The switch stays where the backend is.
     expect(perpetualSwitch()).toHaveAttribute('aria-checked', 'false')
+    expect(saveChanges).toBeDisabled()
+  })
+
+  it('withholds the switch footer when this install cannot offer the switch', async () => {
+    vi.mocked(api.autonudgeList).mockResolvedValueOnce({ enabled: false, loops: [] })
+    await openSchedules()
+    expect(screen.queryByTestId('crew-perpetual-switch')).toBeNull()
+    expect(screen.queryByTestId('crew-perpetual-save-split')).toBeNull()
   })
 
   it('withholds the hand-off while a typed schedule draft is open on the same pane', async () => {
@@ -92,7 +104,7 @@ describe('crew editor — Perpetual mode refusal hand-off', () => {
     const notice = await screen.findByTestId('crew-perpetual-error')
     // The refusal still reads in full; only the navigating action is withheld.
     expect(notice).toHaveTextContent(/stop the task there first/i)
-    expect(within(notice).queryByRole('button', { name: /Ask the agent/ })).toBeNull()
+    expect(within(notice).queryByRole('button', { name: /Open its chat/ })).toBeNull()
     // The draft is intact: nothing navigated.
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('draft')
   })

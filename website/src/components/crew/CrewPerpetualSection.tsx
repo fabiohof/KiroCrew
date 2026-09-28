@@ -56,19 +56,30 @@ const TICK_MS = 15_000
 export default function CrewPerpetualSection({
   crew,
   askAgent = false,
+  onCanSwitchChange,
 }: {
   crew: string
-  /** Offer the refusal's "Ask the agent" hand-off. `ErrorNotice`'s opt-in
+  /** Offer the refusal's crewmate-chat hand-off. `ErrorNotice`'s opt-in
    *  contract: the hand-off navigates to the chat and unmounts the editor,
    *  so the host passes `true` only while it holds no unsaved pane edit and
    *  no open schedule draft (the same gate its own roster notices use). This
    *  section cannot see the sibling panes' drafts, so it defaults to off. */
   askAgent?: boolean
+  /** Reports whether the Schedules footer may describe the visible switch. */
+  onCanSwitchChange?: (canSwitch: boolean) => void
 }) {
   const { t } = useTranslation()
   const reduceMotion = useReducedMotion()
   const sw = useCrewPerpetualSwitch(crew)
   const { loop, state, loaded, failed, monitor, enabled, canSwitch, threadClosed, refusalText } = sw
+
+  useEffect(() => {
+    onCanSwitchChange?.(canSwitch)
+  }, [canSwitch, onCanSwitchChange])
+  useEffect(
+    () => () => onCanSwitchChange?.(false),
+    [onCanSwitchChange],
+  )
 
   const [nowTs, setNowTs] = useState(() => Date.now() / 1000)
   const ticking = state === 'on'
@@ -113,24 +124,20 @@ export default function CrewPerpetualSection({
       </div>
       {/* What pressing this switch does, in two layers rather than one muted
           paragraph -- nine muted sentences is a wall a reader skips, and the
-          two facts that decide the press (when it starts and what it costs)
+          two facts that decide the press (what it does and what it costs)
           were the ones buried in it.
 
           FIRST layer, `CrewPerpetualFacts` -- shared with the Work log's host
           of the same switch, so neither place asks for a press on an unstated
-          cost -- a label/value list in body colour: the first wake, said
-          as timing AND scope -- after the interval already saved for this
-          crewmate (there is no interval editor on this page), and what that
-          wake actually does, which is continue the goals and instructions
-          given in its own chat and end the turn when nothing is due; then the
-          cost, one model turn per wake with the wakes-a-day the saved interval
-          works out to, so spend is a number on screen before the press rather
-          than an inference.
+          cost -- a label/value list in body colour: only work already asked
+          for in this crewmate's chat continues; if nothing is due, nothing
+          happens. Cost is stated as message-sized checks per day, not model
+          machinery, so spend is clear before the press.
 
           SECOND layer, muted, for what does NOT decide the press: that neither
           the wake count nor the running time is capped, what OFF does and does
           not stop, that scheduled jobs are separate work either way, that each
-          later interval starts when the current wake ENDS (so the cadence is
+          later interval starts when the current check ENDS (so the cadence is
           not a frequency) and is the crewmate's own to retune. The editor
           footer owns the separate Save explanation beside its button.
 
@@ -169,6 +176,7 @@ export default function CrewPerpetualSection({
         title={t('components.crewPerpetualSection.change_failed')}
         message={refusalText}
         askAgent={askAgent}
+        askAgentLabel={t('components.crewPerpetualSection.fact_review_chat')}
         testId="crew-perpetual-error"
       />
       {!loaded ? (
@@ -288,6 +296,8 @@ export default function CrewPerpetualSection({
                                 <a
                                   key="chat"
                                   href={sw.chatHref}
+                                  target="_blank"
+                                  rel="noreferrer"
                                   className="text-accent underline underline-offset-2 hover:text-accent-hover"
                                   data-testid="crew-perpetual-monitor-chat"
                                   aria-label={t('components.crewPerpetualSection.fact_review_chat')}
