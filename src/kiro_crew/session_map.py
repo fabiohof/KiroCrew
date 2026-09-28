@@ -2169,6 +2169,39 @@ class SessionMap:
         return cleared
 
     @_guarded
+    def clear_all_slack_links(self) -> list[str]:
+        """Clear EVERY persisted Slack thread binding; return the cleared keys.
+
+        A Slack binding names a thread and a channel but not the workspace they
+        live in -- the persisted fields predate any notion of more than one
+        workspace, and the bot token in the credential store was the only
+        identity there was. When that token is replaced by one for ANOTHER
+        workspace (``GatewayOrchestrator.reconnect_slack`` compares the
+        ``auth.test`` team ids before and after the handshake), every stored
+        destination now spells a channel in a workspace the new client cannot
+        reach: a dashboard turn on such a session posts into the void, and a
+        thread id the new workspace happens to reuse would resolve an inbound
+        reply to the wrong session through the reverse index. Both go together
+        with the bindings, before the new client is published.
+
+        A binding is a Slack binding iff it names a thread, exactly the test
+        :meth:`get_mirror_link` applies: ``set_channel`` parks a non-Slack
+        conversation's namespaced bucket in the legacy ``slack_channel_id``
+        field with no thread, and that bookkeeping is not a Slack destination
+        and is left alone. Each row goes through :meth:`clear_slack_link`, so
+        the reverse index, nonce and mute marker die with it. Runs under the
+        map lock as one unit: no reader observes half a sweep.
+        """
+        cleared: list[str] = []
+        for key in list(self._data):
+            entry = self._data.get(key)
+            if not entry or not entry.get("slack_thread_ts"):
+                continue
+            if self.clear_slack_link(key):
+                cleared.append(key)
+        return cleared
+
+    @_guarded
     def set_mirror_paused(self, key: str, paused: bool, *, origin: bool = False) -> bool:
         """Mute (or unmute) a non-Slack delivery for *key*; return the PREVIOUS state.
 

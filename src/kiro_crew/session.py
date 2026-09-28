@@ -3416,6 +3416,14 @@ class SessionManager:
         """
         return self._session_map.clear_slack_link_if(key, channel_type, token)
 
+    def clear_all_slack_links(self) -> list[str]:
+        """Clear every persisted Slack thread binding; return the cleared session keys.
+
+        The workspace-switch sweep ``GatewayOrchestrator.reconnect_slack`` runs
+        before it publishes a client for a different workspace.
+        """
+        return self._session_map.clear_all_slack_links()
+
     def clear_mirror_links_at(
         self, link: ChannelLink, *, reason: str = UNBIND_REASON_UNSPECIFIED
     ) -> list[str]:
