@@ -3217,6 +3217,36 @@ def _slot_opened_sid(state: "DashboardState", slot_key: str) -> str:
         return ""
 
 
+def _freshest_sid(state: "DashboardState", slot_key: str, resolved: str) -> str:
+    """*resolved*, refreshed from the slot's own record when that has moved since.
+
+    SYNCHRONOUS on purpose, and that is the whole reason it exists separately from
+    :func:`_recorded_sid_of`. That resolver has to suspend -- it reads the durable
+    store -- so a verb resolves its ids BEFORE the final authorization, and the
+    authorization's own config warm suspends as well. A slot that opens its next
+    store inside that hop advances its ``_crew_log_opened_sid``
+    (``Slot.take_crew_log_previous``), and the id resolved before the hop then names
+    the store that slot has just replaced. Written into an append-only
+    ``session/adopted`` or ``session/released`` entry, that is the same permanent
+    wrong answer this resolver exists to prevent, arriving one hop later.
+
+    Re-reading the slot's own record is enough to close the window because it is the
+    resolver's FIRST preference and the only one of its three sources that can move
+    during the hop: the durable store and the mapping are consulted only when that
+    record is empty, and neither is more current than a statement this process just
+    wrote about which store the slot is on.
+
+    A dict lookup and an attribute read, so it belongs after the final
+    authorization, where nothing may suspend -- refreshing before that gate would
+    leave the same window open behind it.
+
+    An empty slot record keeps *resolved*: a slot that CLOSED during the hop does not
+    make the store's answer about which log it was on wrong, and falling back to
+    ``""`` there would drop an id that is still the best available one.
+    """
+    return _slot_opened_sid(state, slot_key) or resolved
+
+
 async def _recorded_sid_of(state: "DashboardState", slot_key: str) -> str:
     """The crew log *slot_key* is writing, or ``""`` when no id can be written.
 
@@ -3390,6 +3420,16 @@ async def adopt_target(
                     status=409,
                     code="tree_unavailable",
                 )
+            # REFRESHED here, synchronously, for the same reason the resolutions happen
+            # before the gate: the gate's own warm suspends, and either of these slots can
+            # open its next store inside that hop -- leaving the id above naming the store
+            # it has just replaced, in an entry nothing later corrects.
+            parent_sid = _freshest_sid(state, caller_key, parent_sid)
+            previous_parent_sid = (
+                _freshest_sid(state, previous_parent, previous_parent_sid)
+                if previous_parent
+                else ""
+            )
             settled, landed = _tree_append_waiter(slot.key)
             crew_log_emit.on_session_adopted(
                 target_sid,
@@ -3522,6 +3562,9 @@ async def release_target(
                     status=409,
                     code="tree_unavailable",
                 )
+            # Refreshed here, synchronously, for the reason the adoption refreshes: the
+            # gate's warm suspends, and the parent can open its next store inside it.
+            previous_parent_sid = _freshest_sid(state, previous_parent, previous_parent_sid)
             settled, landed = _tree_append_waiter(slot.key)
             crew_log_emit.on_session_released(
                 target_sid,

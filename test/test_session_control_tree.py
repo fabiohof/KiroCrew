@@ -921,6 +921,152 @@ def test_the_releases_previous_parent_sid_is_that_slots_store(tmp_path, monkeypa
     assert calls[0]["previous_parent_sid"] == "sid-holder-now"
 
 
+def _advance_on_final_warm(monkeypatch, slot, sid: str) -> "list[int]":
+    """Have *slot* open store *sid* inside the FINAL gate's own suspension.
+
+    The real window this reproduces: a verb resolves its ids before that gate because
+    nothing may suspend after it, the gate's config warm hops to a thread, and a slot
+    that starts its next turn while the verb is off the loop advances its own
+    ``_crew_log_opened_sid`` there. Driven on the SECOND warm, which is the in-lock one
+    -- the gate the append actually follows.
+
+    Returns the warm counter so a caller can assert the hop really happened; an
+    assertion about a stale id proves nothing if the store never advanced.
+    """
+    warms: list[int] = []
+
+    async def _warm():
+        warms.append(1)
+        if len(warms) == 2:
+            slot._crew_log_opened_sid = sid
+
+    monkeypatch.setattr(sc, "prewarm_enabled_check", _warm)
+    return warms
+
+
+def test_the_adoptions_parent_sid_is_refreshed_across_the_final_gates_hop(tmp_path, monkeypatch):
+    """The adopter opening its next store during the gate must not be recorded stale.
+
+    Ordinary behaviour on the adopter's side: a conductor takes a worker over and its own
+    next turn opens a new log in the same instant. The entry would otherwise name the
+    conversation the conductor has just left, permanently.
+    """
+    calls = _emitted(monkeypatch)
+    state = _make_state(tmp_path)
+    caller = _live(state, _opened(_slot(state, "chat-boss"), "sid-boss-before"), "sid-boss")
+    _live(state, _slot(state, "chat-worker"), "sid-worker")
+    warms = _advance_on_final_warm(monkeypatch, caller, "sid-boss-after")
+
+    _run(sc.adopt_target(state, caller_session_key=_key(caller), target="chat-worker"))
+    assert len(warms) == 2
+    assert calls[0]["parent_sid"] == "sid-boss-after"
+
+
+def test_the_adoptions_previous_parent_sid_is_refreshed_across_the_final_gates_hop(
+    tmp_path, monkeypatch
+):
+    """Same window on the REPLACED parent, which no party to the verb is watching."""
+    calls = _emitted(monkeypatch)
+    state = _make_state(tmp_path)
+    caller = _live(state, _slot(state, "chat-new"), "sid-new")
+    _live(state, _slot(state, "chat-worker"), "sid-worker")
+    old = _live(state, _opened(_slot(state, "chat-old"), "sid-old-before"), "sid-old")
+    _hold(state, "chat-worker", "chat-old", sid="sid-worker")
+    warms = _advance_on_final_warm(monkeypatch, old, "sid-old-after")
+
+    _run(sc.adopt_target(state, caller_session_key=_key(caller), target="chat-worker"))
+    assert len(warms) == 2
+    assert calls[0]["previous_parent_sid"] == "sid-old-after"
+
+
+def test_the_releases_previous_parent_sid_is_refreshed_across_the_final_gates_hop(
+    tmp_path, monkeypatch
+):
+    """Same window in the release verb, whose single resolution sits before the same gate."""
+    calls = _emitted(monkeypatch)
+    state = _make_state(tmp_path)
+    holder = _live(state, _opened(_slot(state, "chat-holder"), "sid-holder-before"), "sid-holder")
+    child = _live(state, _slot(state, "chat-child"), "sid-child")
+    _hold(state, "chat-child", "chat-holder", sid="sid-child")
+    warms = _advance_on_final_warm(monkeypatch, holder, "sid-holder-after")
+
+    _run(sc.release_target(state, caller_session_key=_key(child), target="chat-child"))
+    assert len(warms) == 2
+    assert calls[0]["previous_parent_sid"] == "sid-holder-after"
+
+
+def test_a_parent_that_closes_during_the_hop_keeps_the_id_already_resolved(tmp_path, monkeypatch):
+    """The refresh may only ever REPLACE an id, never erase one.
+
+    A slot gone from ``_slots`` has no opened record to read, and that absence is not
+    news about which log it was on -- the durable store answered that before the hop.
+    Falling back to ``""`` there would turn a named parent into a parent whose log is
+    unnamed, which is a different claim and an equally permanent one. This is the control
+    on the three tests above: a refresh written as an unconditional overwrite passes all
+    of them and fails this.
+    """
+    calls = _emitted(monkeypatch)
+    state = _make_state(tmp_path)
+    caller = _live(state, _slot(state, "chat-new"), "sid-new")
+    _live(state, _slot(state, "chat-worker"), "sid-worker")
+    _live(state, _slot(state, "chat-old"), "sid-old")
+    _hold(state, "chat-worker", "chat-old", sid="sid-worker")
+    _STORE_HEADS["chat-old"] = ("sid-old-store", True, True)
+    warms: list[int] = []
+
+    async def _close_on_final_warm():
+        warms.append(1)
+        if len(warms) == 2:
+            state._slots.pop("chat-old", None)
+
+    monkeypatch.setattr(sc, "prewarm_enabled_check", _close_on_final_warm)
+
+    _run(sc.adopt_target(state, caller_session_key=_key(caller), target="chat-worker"))
+    assert len(warms) == 2
+    assert calls[0]["previous_parent_sid"] == "sid-old-store"
+
+
+@pytest.mark.parametrize(
+    ("verb", "emitter"),
+    [("adopt_target", "on_session_adopted"), ("release_target", "on_session_released")],
+)
+def test_the_sid_refresh_sits_after_the_final_authorization(verb: str, emitter: str):
+    """Structural, because placing this refresh EARLIER leaves the window it closes open.
+
+    The refresh is only worth anything after the last suspension before the append, and
+    the gate itself suspends -- so a refresh moved up to sit beside the resolutions reads
+    as a fix while changing nothing. Synchronous for the same reason, which the sibling
+    no-suspension test enforces from the other side.
+    """
+    import ast
+    import inspect
+
+    fn = next(
+        node
+        for node in ast.walk(ast.parse(inspect.getsource(sc)))
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == verb
+    )
+
+    def called_at(name: str) -> list[int]:
+        return sorted(
+            node.lineno
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call)
+            and (getattr(node.func, "attr", None) or getattr(node.func, "id", None)) == name
+        )
+
+    emit_line = min(called_at(emitter))
+    final_gate = max(line for line in called_at("authorize_target") if line < emit_line)
+    refreshes = called_at("_freshest_sid")
+    assert refreshes, f"{verb} no longer refreshes any resolved sid"
+    early = [line for line in refreshes if line < final_gate]
+    assert early == [], (
+        f"{verb} refreshes at {early}, before its final authorization (line {final_gate}), "
+        "so the gate's own suspension can still stale the id"
+    )
+    assert max(refreshes) < emit_line, f"{verb} refreshes after {emitter} has been handed the id"
+
+
 def test_the_mapping_is_refused_inside_the_replay_pending_window(tmp_path, monkeypatch):
     """The window where the map deliberately names the generation BEFORE the store.
 
