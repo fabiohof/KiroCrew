@@ -52,6 +52,7 @@ import reducer, {
   selectSlotPendingApproval,
   selectComposerBusy,
   confirmOptimisticSend,
+  markSendUnconfirmed,
 } from '../store/chatSlice'
 import './mockApiClient'
 
@@ -1391,6 +1392,78 @@ describe('confirmOptimisticSend — the send response retires the pending state'
 
     expect(state.messages).toHaveLength(1)
     expect(state.messages[0].meta?.optimistic).toBe(true)
+  })
+})
+
+/* The transport deadline fired with no receipt and no echo: the bubble is still
+ * `optimistic`, and nothing will clear that until a late echo does. The mark is
+ * what the row's pending line is drawn from -- the flag alone also survives a
+ * refused or connection-failed send and a queued receipt, none of which is a
+ * wait -- and it falls with the flag on both confirmation doors. */
+describe('markSendUnconfirmed — the deadline mark on a bubble whose receipt never came', () => {
+  const initial = reducer(undefined, { type: '@@INIT' })
+  const withSlot = { ...initial, activeSlot: 'slot-1' }
+  const bubble = (sendId: string, content = 'did this arrive?') =>
+    appendMessage({ role: 'user', content, cls: '', ts: '2026-09-28T10:00:00.000Z', meta: { sendId } })
+
+  it('marks the matching optimistic bubble and keeps its flag and sendId', () => {
+    let state = reducer(withSlot, bubble('s-late'))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-late' }))
+    expect(state.messages[0].meta).toMatchObject({ optimistic: true, sendId: 's-late', deliveryUnconfirmed: true })
+  })
+
+  it('marks only the matching send, leaving a sibling bubble unmarked', () => {
+    let state = reducer(withSlot, bubble('s-a', 'first'))
+    state = reducer(state, bubble('s-b', 'second'))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-b' }))
+    expect(state.messages[0].meta?.deliveryUnconfirmed).toBeUndefined()
+    expect(state.messages[1].meta?.deliveryUnconfirmed).toBe(true)
+  })
+
+  it('leaves a row an echo or receipt already confirmed alone', () => {
+    let state = reducer(withSlot, bubble('s-confirmed'))
+    state = reducer(state, confirmOptimisticSend({ slot: 'slot-1', sendId: 's-confirmed', mid: 'm-1' }))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-confirmed' }))
+    expect(state.messages[0].meta?.deliveryUnconfirmed).toBeUndefined()
+    expect(state.messages[0].meta?.optimistic).toBeUndefined()
+  })
+
+  it('is a no-op for an unknown sendId', () => {
+    let state = reducer(withSlot, bubble('s-mine'))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-someone-else' }))
+    expect(state.messages).toHaveLength(1)
+    expect(state.messages[0].meta?.deliveryUnconfirmed).toBeUndefined()
+  })
+
+  it('marks a background slot bubble in slotMessages (the user switched sessions inside the deadline)', () => {
+    let state = reducer(withSlot, appendSlotMessage({
+      slot: 'pane-9',
+      message: { role: 'user', content: 'pane send', cls: '', ts: '2026-09-28T10:00:00.000Z', meta: { sendId: 's-pane' } } as ChatMessage,
+    }))
+    state = reducer(state, markSendUnconfirmed({ slot: 'pane-9', sendId: 's-pane' }))
+    expect(state.slotMessages['pane-9'][0].meta?.deliveryUnconfirmed).toBe(true)
+  })
+
+  it('falls with the flag when the receipt arrives after all', () => {
+    let state = reducer(withSlot, bubble('s-late-receipt'))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-late-receipt' }))
+    state = reducer(state, confirmOptimisticSend({ slot: 'slot-1', sendId: 's-late-receipt', mid: 'm-2' }))
+    expect(state.messages[0].meta?.deliveryUnconfirmed).toBeUndefined()
+    expect(state.messages[0].meta?.optimistic).toBeUndefined()
+    expect(state.messages[0].meta?.mid).toBe('m-2')
+  })
+
+  it('falls with the flag when a correlated echo lands', () => {
+    let state = reducer(withSlot, bubble('s-late-echo'))
+    state = reducer(state, markSendUnconfirmed({ slot: 'slot-1', sendId: 's-late-echo' }))
+    state = reducer(state, sseChatMessage({
+      slot: 'slot-1', role: 'user', content: 'did this arrive?', cls: '', ts: '2026-09-28T10:00:05.000Z',
+      meta: { sendId: 's-late-echo', mid: 'm-3' },
+    }))
+    expect(state.messages).toHaveLength(1)
+    expect(state.messages[0].meta?.deliveryUnconfirmed).toBeUndefined()
+    expect(state.messages[0].meta?.optimistic).toBeUndefined()
+    expect(state.messages[0].meta?.mid).toBe('m-3')
   })
 })
 

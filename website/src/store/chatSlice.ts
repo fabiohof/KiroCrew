@@ -192,6 +192,9 @@ function reconcileOptimisticEcho(
       if (ts) m.ts = ts
       m.meta = { ...(m.meta || {}), ...meta }
       delete (m.meta as Record<string, unknown>).optimistic
+      // The echo is the delivery proof a late receipt never gave; the deadline
+      // mark `markSendUnconfirmed` stamped falls with the flag.
+      delete (m.meta as Record<string, unknown>).deliveryUnconfirmed
       if (!meta.steer) delete (m.meta as Record<string, unknown>).steer
       return true
     }
@@ -4470,6 +4473,20 @@ export const selectTurnInterrupted = (state: RootState): boolean => {
         continue
       }
       if (m.role !== 'user') return sawTrailingError
+      // A user row still carrying `meta.optimistic` is the composer's own
+      // bubble, minted at send time and cleared only by the send's receipt
+      // (`confirmOptimisticSend`) or a correlated echo. Until then nothing
+      // proves the server ever received the text -- a POST that hit the
+      // transport deadline before leaving the browser draws exactly this row --
+      // so no turn was opened and none was interrupted. Reading it as one
+      // offers a Resume whose bare continue runs against a transcript that
+      // never held the message, and the agent answers the request before it.
+      // An error row behind it is the send's own failure, not a reply that
+      // died, so it does not revive the verdict. This branch is invisible to
+      // the `is_turn_interrupted` mirror by construction: the flag is minted
+      // client-side and never sent, so no transcript the server can produce
+      // carries a row for it to read, and the two cannot disagree.
+      if (m.meta?.optimistic) return false
       // A `/compact` answered by its compaction notice is a FINISHED turn --
       // unless an error row trails the notice, the same evidence the
       // plain-assistant branch honors. First-whitespace-token match using
@@ -4872,6 +4889,9 @@ const chatSlice = createSlice({
           if (m.role !== 'user' || m.meta?.sendId !== sendId) continue
           const meta = { ...(m.meta || {}) }
           delete meta.optimistic
+          // A receipt that arrives after all is the confirmation the deadline
+          // mark said was missing.
+          delete meta.deliveryUnconfirmed
           // Stamp the server-minted row id the receipt carried back. The bubble
           // was appended client-side with only a `sendId` (no server identity),
           // so either the user echo or this receipt can supply its identity.
@@ -4886,6 +4906,34 @@ const chatSlice = createSlice({
         return false
       }
       if (!confirm(state.messages)) confirm(state.slotMessages[safeKey(slot)])
+    },
+    /** Record that a send's own receipt never came: the transport deadline
+     *  fired (`response-late`) and no correlated echo has confirmed the row, so
+     *  the bubble stays `optimistic` and only a late echo can still clear it.
+     *  Stamps `meta.deliveryUnconfirmed` on that bubble; the row's pending line
+     *  is drawn from THIS mark, never from `optimistic` alone, because the flag
+     *  also survives a `refused` or `transport-error` send (whose error row and
+     *  restored composer already say what happened) and a `queued` receipt
+     *  (whose card owns the text), so a line keyed on it would claim a wait on
+     *  rows nobody is waiting for. Client-minted like `optimistic`, never sent,
+     *  and cleared by the same two doors (`confirmOptimisticSend`, the echo
+     *  reconcile). Scans BOTH arrays as `confirmOptimisticSend` does; a row an
+     *  echo already confirmed is left alone. */
+    markSendUnconfirmed(state, action: PayloadAction<{ slot: string; sendId: string }>) {
+      const { slot, sendId } = action.payload
+      if (isUnsafeKey(slot)) return
+      const mark = (msgs: ChatMessage[] | undefined): boolean => {
+        if (!msgs) return false
+        const floor = Math.max(0, msgs.length - RECONCILE_WINDOW)
+        for (let i = msgs.length - 1; i >= floor; i--) {
+          const m = msgs[i]
+          if (m.role !== 'user' || m.meta?.sendId !== sendId) continue
+          if (m.meta?.optimistic) m.meta = { ...m.meta, deliveryUnconfirmed: true }
+          return true
+        }
+        return false
+      }
+      if (!mark(state.messages)) mark(state.slotMessages[safeKey(slot)])
     },
     /** Resolve an optimistic steer bubble against the steer POST's own receipt.
      *
@@ -7549,7 +7597,7 @@ const chatSlice = createSlice({
 
 export const {
   setActiveSlot, clearSlotState, setPendingInput, setAgentSwitchNotice, clearSwitchSlotGone, clearUnresumableResume, clearUndeletableHistory, setQuestionCard, clearQuestionCard, setQuestionDraft, resolveQuestionCard, setFollowupCard, clearFollowupCard, dismissFollowupItem, setFolderSuggestion, clearFolderSuggestion, ageFolderSuggestion, appendMessage, appendSlotMessage, updateStreamingMessage, finalizeAssistant,
-  removeThinking, confirmOptimisticSend, resolveOptimisticSteer, removeByApprovalId, resolveByApprovalId, clearPendingPermissions, setSlotRunning, setSlotStopping, settleStopNotRunning, startLocalTurn, endLocalTurn, syncSlotRunningFromServer, setSlotState, setSlotStatusDetail, setStopPressedAt, clearMessages, clearSlotCache, truncateAfterIndex, replaceMessages, hydrateSlotMessages, sseChatMessage, sseChatMessageUpdate, sseChatMessagePatchByTs, sseThinkingChunk, removeQueuedMessage, appendQueuedMessage, cancelQueuedMessage, editQueuedMessage, reorderQueuedMessages,
+  removeThinking, confirmOptimisticSend, markSendUnconfirmed, resolveOptimisticSteer, removeByApprovalId, resolveByApprovalId, clearPendingPermissions, setSlotRunning, setSlotStopping, settleStopNotRunning, startLocalTurn, endLocalTurn, syncSlotRunningFromServer, setSlotState, setSlotStatusDetail, setStopPressedAt, clearMessages, clearSlotCache, truncateAfterIndex, replaceMessages, hydrateSlotMessages, sseChatMessage, sseChatMessageUpdate, sseChatMessagePatchByTs, sseThinkingChunk, removeQueuedMessage, appendQueuedMessage, cancelQueuedMessage, editQueuedMessage, reorderQueuedMessages,
   sseContextUsage, setVoicePlaying, setVoiceAudio,
   toggleActivity, openActivityToTab, openActivityPanel, openActivityToTool, clearFocusToolCallId, requestSlotReveal, clearSlotReveal, requestFolderReveal, clearSubagentsForSnapshot, sseSubagentPending, markSubagentApproving, sseSubagentSpawn, sseSubagentTool, sseSubagentStalled, sseSubagentRetrying, sseSubagentDone, sseSubagentQueued,
   sseSubagentBatchUpdate, sseSubagentBatchChunks, selectSubagent, clearTerminalSubagents,
